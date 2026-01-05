@@ -138,8 +138,8 @@ async def main():
         logger.error("Missing required environment variables. Please check your .env file.")
         return
     
-    if not MONITORED_CHANNELS:
-        logger.error("No channels specified in MONITORED_CHANNELS. Please add at least one channel.")
+    if not MONITORED_CHANNELS and not CHANNEL_WEBHOOK_PAIRS:
+        logger.error("No channels specified in MONITORED_CHANNELS or CHANNEL_WEBHOOK_PAIRS. Please add at least one channel.")
         return
     
     # Create the client and connect
