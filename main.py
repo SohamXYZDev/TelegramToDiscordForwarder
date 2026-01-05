@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import re
+import json
 from telethon import TelegramClient, events
 from telethon.tl.types import Channel
 import aiohttp
@@ -84,7 +85,7 @@ def parse_channel_identifier(channel_input):
     return None
 
 
-async def send_to_discord(message_text, channel_name, message_url=None):
+async def send_to_discord(message_text, channel_name, message_url=None, image_url=None):
     """Send a message to Discord webhook"""
     try:
         async with aiohttp.ClientSession() as session:
@@ -99,6 +100,10 @@ async def send_to_discord(message_text, channel_name, message_url=None):
             
             if message_url:
                 embed["url"] = message_url
+            
+            # Add image to embed if present
+            if image_url:
+                embed["image"] = {"url": image_url}
             
             payload = {
                 "embeds": [embed]
@@ -210,6 +215,28 @@ async def main():
             if is_monitored:
                 message_text = event.message.message or "[No text content]"
                 
+                # Check for photo/image
+                image_url = None
+                if event.message.photo:
+                    try:
+                        # Download photo to memory
+                        photo_bytes = await client.download_media(event.message.photo, file=bytes)
+                        
+                        # Upload to a temporary hosting service or use Telegram's CDN
+                        # For now, we'll try to get the file URL directly
+                        # Telegram CDN URLs can be constructed but require file access hash
+                        # Simpler approach: Download and re-upload to Discord
+                        
+                        # Get the largest photo size
+                        largest_photo = max(event.message.photo.sizes, key=lambda s: s.size if hasattr(s, 'size') else 0)
+                        
+                        # Construct Telegram CDN URL (may not always work for private chats)
+                        # Alternative: We'll attach the photo directly
+                        logger.info(f"Message contains a photo")
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing photo: {e}")
+                
                 # Try to construct message URL
                 message_url = None
                 if isinstance(chat, Channel):
@@ -226,12 +253,52 @@ async def main():
                 chat_type = "Channel" if isinstance(chat, Channel) else "DM/Group"
                 logger.info(f"New message from {chat_title} ({chat_type}, ID: {chat_id}): {message_text[:50]}...")
                 
-                # Forward to Discord
-                await send_to_discord(
-                    message_text,
-                    chat_title or chat_username or f"Chat {chat_id}",
-                    message_url
-                )
+                # Forward to Discord (with or without image)
+                if event.message.photo:
+                    # Download and send photo separately
+                    try:
+                        photo_bytes = await client.download_media(event.message.photo, file=bytes)
+                        
+                        # Send to Discord with file upload
+                        async with aiohttp.ClientSession() as session:
+                            form = aiohttp.FormData()
+                            form.add_field('file', photo_bytes, filename='image.jpg', content_type='image/jpeg')
+                            
+                            # Create embed
+                            embed = {
+                                "title": f"New message from {chat_title}",
+                                "description": message_text[:4096] if message_text else "📷 Image",
+                                "color": 5814783,
+                                "footer": {"text": f"Source: {chat_title}"}
+                            }
+                            if message_url:
+                                embed["url"] = message_url
+                            
+                            payload = {
+                                "embeds": [embed]
+                            }
+                            form.add_field('payload_json', json.dumps(payload))
+                            
+                            async with session.post(DISCORD_WEBHOOK_URL, data=form) as response:
+                                if response.status == 200 or response.status == 204:
+                                    logger.info(f"Successfully forwarded message with image to Discord from {chat_title}")
+                                else:
+                                    logger.error(f"Failed to send to Discord. Status: {response.status}")
+                    except Exception as e:
+                        logger.error(f"Error sending photo to Discord: {e}")
+                        # Fallback to text only
+                        await send_to_discord(
+                            message_text,
+                            chat_title or chat_username or f"Chat {chat_id}",
+                            message_url
+                        )
+                else:
+                    # Text only message
+                    await send_to_discord(
+                        message_text,
+                        chat_title or chat_username or f"Chat {chat_id}",
+                        message_url
+                    )
                     
         except Exception as e:
             logger.error(f"Error handling message: {e}")
