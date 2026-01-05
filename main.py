@@ -30,6 +30,10 @@ DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL')
 MONITORED_CHANNELS = os.getenv('MONITORED_CHANNELS', '').split(',')
 MONITORED_CHANNELS = [ch.strip() for ch in MONITORED_CHANNELS if ch.strip()]
 
+# Channel to webhook mapping
+CHANNEL_WEBHOOK_PAIRS = os.getenv('CHANNEL_WEBHOOK_PAIRS', '').split(',')
+CHANNEL_WEBHOOK_PAIRS = [pair.strip() for pair in CHANNEL_WEBHOOK_PAIRS if pair.strip()]
+
 # Session name
 SESSION_NAME = 'telegram_selfbot'
 
@@ -85,8 +89,15 @@ def parse_channel_identifier(channel_input):
     return None
 
 
-async def send_to_discord(message_text, channel_name, message_url=None, image_url=None):
+async def send_to_discord(message_text, channel_name, message_url=None, image_url=None, webhook_url=None):
     """Send a message to Discord webhook"""
+    # Use provided webhook or fall back to default
+    target_webhook = webhook_url or DISCORD_WEBHOOK_URL
+    
+    if not target_webhook:
+        logger.error("No webhook URL available for sending message")
+        return
+    
     try:
         async with aiohttp.ClientSession() as session:
             embed = {
@@ -109,7 +120,7 @@ async def send_to_discord(message_text, channel_name, message_url=None, image_ur
                 "embeds": [embed]
             }
             
-            async with session.post(DISCORD_WEBHOOK_URL, json=payload) as response:
+            async with session.post(target_webhook, json=payload) as response:
                 if response.status == 204:
                     logger.info(f"Successfully forwarded message to Discord from {channel_name}")
                 else:
@@ -138,8 +149,53 @@ async def main():
     # Parse monitored channels and resolve them
     monitored_chat_ids = set()
     monitored_usernames = set()
+    channel_webhook_map = {}  # Maps chat_id to webhook URL
     
     logger.info("Resolving monitored channels...")
+    
+    # Parse channel-webhook pairs first
+    for pair in CHANNEL_WEBHOOK_PAIRS:
+        if '|' not in pair:
+            logger.warning(f"Invalid channel-webhook pair format: {pair}")
+            continue
+        
+        channel_input, webhook_url = pair.split('|', 1)
+        channel_input = channel_input.strip()
+        webhook_url = webhook_url.strip()
+        
+        parsed = parse_channel_identifier(channel_input)
+        if not parsed:
+            logger.warning(f"Could not parse channel identifier: {channel_input}")
+            continue
+        
+        try:
+            if parsed['type'] == 'id':
+                # Direct channel ID
+                monitored_chat_ids.add(parsed['value'])
+                channel_webhook_map[parsed['value']] = webhook_url
+                logger.info(f"Monitoring channel ID: {parsed['value']} -> Custom webhook")
+                
+            elif parsed['type'] == 'username':
+                # Public channel username
+                monitored_usernames.add(parsed['value'])
+                # For usernames, we'll need to resolve to ID later
+                logger.info(f"Monitoring channel: @{parsed['value']} -> Custom webhook")
+                
+            elif parsed['type'] == 'invite':
+                # Private invite link - need to join and get entity
+                try:
+                    entity = await client.get_entity(channel_input)
+                    chat_id = entity.id
+                    monitored_chat_ids.add(chat_id)
+                    channel_webhook_map[chat_id] = webhook_url
+                    logger.info(f"Monitoring private channel (ID: {chat_id}) -> Custom webhook")
+                except Exception as e:
+                    logger.error(f"Could not resolve invite link {channel_input}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error resolving channel {channel_input}: {e}")
+    
+    # Parse regular monitored channels (using default webhook)
     for channel_input in MONITORED_CHANNELS:
         parsed = parse_channel_identifier(channel_input)
         if not parsed:
@@ -215,6 +271,9 @@ async def main():
             if is_monitored:
                 message_text = event.message.message or "[No text content]"
                 
+                # Get the webhook URL for this channel
+                webhook_url = channel_webhook_map.get(chat_id, DISCORD_WEBHOOK_URL)
+                
                 # Check for photo/image
                 image_url = None
                 if event.message.photo:
@@ -279,7 +338,7 @@ async def main():
                             }
                             form.add_field('payload_json', json.dumps(payload))
                             
-                            async with session.post(DISCORD_WEBHOOK_URL, data=form) as response:
+                            async with session.post(webhook_url, data=form) as response:
                                 if response.status == 200 or response.status == 204:
                                     logger.info(f"Successfully forwarded message with image to Discord from {chat_title}")
                                 else:
@@ -290,14 +349,16 @@ async def main():
                         await send_to_discord(
                             message_text,
                             chat_title or chat_username or f"Chat {chat_id}",
-                            message_url
+                            message_url,
+                            webhook_url=webhook_url
                         )
                 else:
                     # Text only message
                     await send_to_discord(
                         message_text,
                         chat_title or chat_username or f"Chat {chat_id}",
-                        message_url
+                        message_url,
+                        webhook_url=webhook_url
                     )
                     
         except Exception as e:

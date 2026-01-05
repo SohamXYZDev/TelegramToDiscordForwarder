@@ -54,7 +54,8 @@ This is a **selfbot** that uses your personal Telegram account. Please note:
      TELEGRAM_API_HASH=your_api_hash
      TELEGRAM_PHONE=+1234567890
      DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
-     MONITORED_CHANNELS=@channel1,@channel2,Channel Name
+     CHANNEL_WEBHOOK_PAIRS=https://t.me/channel1|https://discord.com/api/webhooks/xxx,https://t.me/channel2|https://discord.com/api/webhooks/yyy
+     MONITORED_CHANNELS=@channel3,Channel Name
      ```
 
 ## Configuration
@@ -64,8 +65,9 @@ This is a **selfbot** that uses your personal Telegram account. Please note:
 - `TELEGRAM_API_ID`: Your Telegram API ID from my.telegram.org
 - `TELEGRAM_API_HASH`: Your Telegram API Hash from my.telegram.org
 - `TELEGRAM_PHONE`: Your phone number with country code (e.g., +1234567890)
-- `DISCORD_WEBHOOK_URL`: Your Discord webhook URL
-- `MONITORED_CHANNELS`: Comma-separated list of channels to monitor
+- `DISCORD_WEBHOOK_URL`: Default Discord webhook URL (fallback)
+- `CHANNEL_WEBHOOK_PAIRS`: Map specific Telegram channels to specific Discord webhooks (format: `channel|webhook,channel|webhook`)
+- `MONITORED_CHANNELS`: Comma-separated list of channels without specific webhooks (uses default webhook)
 
 ### Channel Specification
 
